@@ -1,7 +1,7 @@
 #!/bin/bash
 #Run the very same test suite as runned on CI, but locally
 
-chmod +x valgrind
+chmod +x valgrind #change file privileges
 cd build
 
 # last known values (run searchd with logdebug to see the values)
