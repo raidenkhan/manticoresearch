@@ -19,94 +19,89 @@
 #include <charconv>
 #endif
 
-//////////////////////////////////////////////////////////////////////////
-// blob attributes
-
+// Enumerations for different blob row lengths
 enum
 {
-	BLOB_ROW_LEN_BYTE = 0,
-	BLOB_ROW_LEN_WORD = 1,
-	BLOB_ROW_LEN_DWORD = 2
+    BLOB_ROW_LEN_BYTE = 0,
+    BLOB_ROW_LEN_WORD = 1,
+    BLOB_ROW_LEN_DWORD = 2
 };
 
-
-static BYTE CalcBlobRowFlags ( DWORD uTotalLen )
+// Function to calculate the flags for a blob row based on its total length
+static BYTE CalcBlobRowFlags(DWORD uTotalLen)
 {
-	if ( uTotalLen<0xFF )
-		return BLOB_ROW_LEN_BYTE;
-
-	if ( uTotalLen<0xFFFF )
-		return BLOB_ROW_LEN_WORD;
-
-	return BLOB_ROW_LEN_DWORD;
+    if (uTotalLen < 0xFF)
+        return BLOB_ROW_LEN_BYTE;
+    if (uTotalLen < 0xFFFF)
+        return BLOB_ROW_LEN_WORD;
+    return BLOB_ROW_LEN_DWORD;
 }
 
-
-static DWORD RowFlagsToLen ( BYTE uFlags )
+// Function to convert blob row flags to length
+static DWORD RowFlagsToLen(BYTE uFlags)
 {
-	switch ( uFlags )
-	{
-	case BLOB_ROW_LEN_BYTE:		return 1;
-	case BLOB_ROW_LEN_WORD:		return 2;
-	case BLOB_ROW_LEN_DWORD:	return 4;
-	default:
-		assert ( 0 && "Unknown blob flags" );
-		return 0;
-	}
+    switch (uFlags)
+    {
+    case BLOB_ROW_LEN_BYTE: return 1;
+    case BLOB_ROW_LEN_WORD: return 2;
+    case BLOB_ROW_LEN_DWORD: return 4;
+    default:
+        assert(0 && "Unknown blob flags");
+        return 0;
+    }
 }
 
-
+// Base class for attribute packer
 class AttributePacker_i
 {
 public:
-	virtual								~AttributePacker_i(){}
-	virtual bool						SetData ( const BYTE * pData, int iDataLen, CSphString & sError ) = 0;
-	virtual const CSphVector<BYTE> &	GetData() const = 0;
+    virtual ~AttributePacker_i() {}
+    virtual bool SetData(const BYTE* pData, int iDataLen, CSphString& sError) = 0;
+    virtual const CSphVector<BYTE>& GetData() const = 0;
 };
 
-
+// Concrete implementation of AttributePacker_i
 class AttributePacker_c : public AttributePacker_i
 {
 public:
-	bool SetData ( const BYTE * pData, int iDataLen, CSphString & /*sError*/ ) override
-	{
-		m_dData.Resize ( iDataLen );
-		memcpy ( m_dData.Begin(), pData, iDataLen );
-		return true;
-	}
+    bool SetData(const BYTE* pData, int iDataLen, CSphString& /*sError*/) override
+    {
+        m_dData.Resize(iDataLen);
+        memcpy(m_dData.Begin(), pData, iDataLen);
+        return true;
+    }
 
-	const CSphVector<BYTE> & GetData() const override
-	{
-		return m_dData;
-	}
+    const CSphVector<BYTE>& GetData() const override
+    {
+        return m_dData;
+    }
 
 protected:
-	CSphVector<BYTE>	m_dData;
+    CSphVector<BYTE> m_dData;
 };
 
-
-// packs MVAs coming from updates (pairs of DWORDS for each value)
+// Template class for attribute packer of MVAs
 template <typename INT>
 class AttributePacker_MVA_T : public AttributePacker_c
 {
 public:
-	bool SetData ( const BYTE * pData, int iDataLen, CSphString & /*sError*/ ) override
-	{
-		int iValueSize = sizeof ( int64_t );
-		int nValues = iDataLen/iValueSize;
-		m_dData.Resize ( nValues*sizeof(INT) );
-		auto * pResult = (INT*)m_dData.Begin();
+    bool SetData(const BYTE* pData, int iDataLen, CSphString& /*sError*/) override
+    {
+        int iValueSize = sizeof(int64_t);
+        int nValues = iDataLen / iValueSize;
+        m_dData.Resize(nValues * sizeof(INT));
+        auto* pResult = (INT*)m_dData.Begin();
 
-		for ( int i = 0; i<nValues; i++ )
-		{
-			auto iVal = sphUnalignedRead ( *(int64_t*)const_cast<BYTE*>(pData) );
-			*pResult = INT(iVal);
-			pResult++;
-			pData += iValueSize;
-		}
+        for (int i = 0; i < nValues; i++)
+        {
+            auto iVal = sphUnalignedRead(*(int64_t*)const_cast<BYTE*>(pData));
+            *pResult = INT(iVal);
+            pResult++;
+            pData += iValueSize;
+        }
 
-		return true;
-	}
+        return true;
+    }
 };
 
 using AttributePacker_MVA32_c = AttributePacker_MVA_T<DWORD>;
@@ -114,41 +109,40 @@ using AttributePacker_MVA32_c = AttributePacker_MVA_T<DWORD>;
 class AttributePacker_Json_c : public AttributePacker_c
 {
 public:
-	bool SetData ( const BYTE * pData, int iDataLen, CSphString & sError ) override
-	{
-		m_dData.Resize(0);
-		if ( !iDataLen )
-			return true;
+    bool SetData(const BYTE* pData, int iDataLen, CSphString& sError) override
+    {
+        m_dData.Resize(0);
+        if (!iDataLen)
+            return true;
 
-		// WARNING, tricky bit
-		// flex lexer needs last two (!) bytes to be zeroes
-		// asciiz string supplies one, and we fill out the extra one
-		// and that works, because CSphString always allocates a small extra gap
-		char * szData = const_cast<char*>((const char*)pData);
-		szData[iDataLen] = '\0';
-		szData[iDataLen+1] = '\0';
+        // WARNING, tricky bit
+        // flex lexer needs last two (!) bytes to be zeroes
+        // asciiz string supplies one, and we fill out the extra one
+        // and that works, because CSphString always allocates a small extra gap
+        char* szData = const_cast<char*>((const char*)pData);
+        szData[iDataLen] = '\0';
+        szData[iDataLen + 1] = '\0';
 
-		return sphJsonParse ( m_dData, szData, g_bJsonAutoconvNumbers, g_bJsonKeynamesToLowercase, true, sError );
-	}
+        return sphJsonParse(m_dData, szData, g_bJsonAutoconvNumbers, g_bJsonKeynamesToLowercase, true, sError);
+    }
 };
 
-//////////////////////////////////////////////////////////////////////////
+// Base class for BlobRowBuilder
 class BlobRowBuilder_Base_c : public BlobRowBuilder_i
 {
 public:
-	bool					SetAttr ( int iAttr, const BYTE * pData, int iDataLen, CSphString & sError ) override;
+    bool SetAttr(int iAttr, const BYTE* pData, int iDataLen, CSphString& sError) override;
 
 protected:
-	CSphVector<std::unique_ptr<AttributePacker_i>> m_dAttrs;
+    CSphVector<std::unique_ptr<AttributePacker_i>> m_dAttrs;
 };
 
-
-bool BlobRowBuilder_Base_c::SetAttr ( int iAttr, const BYTE * pData, int iDataLen, CSphString & sError )
+bool BlobRowBuilder_Base_c::SetAttr(int iAttr, const BYTE* pData, int iDataLen, CSphString& sError)
 {
-	return m_dAttrs[iAttr]->SetData ( pData, iDataLen, sError );
+    return m_dAttrs[iAttr]->SetData(pData, iDataLen, sError);
 }
 
-//////////////////////////////////////////////////////////////////////////
+// Concrete implementation of BlobRowBuilder for file
 class BlobRowBuilder_File_c : public BlobRowBuilder_Base_c
 {
 public:
